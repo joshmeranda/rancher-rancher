@@ -31,6 +31,13 @@ auditLog:
     # options: Always, Never, IfNotPresent
     pullPolicy: "IfNotPresent"
 
+# Rancher features
+# This object is squashed into a single string as described here: https://github.com/rancher/rancher/blob/main/main.go#L149-L155
+# This section should contain the name of a feature with a boolean describing if it should be enabled or not. A list of features can be found here: https://github.com/rancher/rancher/blob/main/pkg/features/feature.go
+# example:
+# features:
+#   imperative-api-extension: true
+
 # As of Rancher v2.5.0 this flag is deprecated and must be set to 'true' in order for Rancher to start
 addLocal: "true"
 

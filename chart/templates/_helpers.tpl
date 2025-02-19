@@ -86,3 +86,14 @@ add below linux tolerations to workloads could be scheduled to those linux nodes
     {{- .Values.auditLog.image.repository -}}:{{- .Values.auditLog.image.tag -}}
   {{- end }}
 {{- end -}}
+
+{{/*
+    Construct a features flag string
+*/}}
+{{- define "rancher.features" -}}
+  {{- $features := "" -}}
+  {{- range $feature, $enabled := .Values.features -}}
+    {{- $features = printf "%s,%s=%t" $features $feature $enabled -}}
+  {{- end -}}
+  {{- $features  | trimPrefix "," -}}
+{{- end -}}
