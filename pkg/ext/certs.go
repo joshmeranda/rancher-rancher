@@ -2,6 +2,7 @@ package ext
 
 import (
 	"bytes"
+	"context"
 	cryptorand "crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -20,9 +21,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/selection"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
 	"k8s.io/client-go/util/keyutil"
 	netutils "k8s.io/utils/net"
@@ -198,43 +196,31 @@ func (p *rotatingSNIProvider) CurrentCertKeyContent() ([]byte, []byte) {
 	return bytes.Clone(p.cert), bytes.Clone(p.key)
 }
 
-func (p *rotatingSNIProvider) Run(stopChan <-chan struct{}) error {
+func (p *rotatingSNIProvider) Run(ctx context.Context) error {
 	logrus.Info("starting imperative api cert rotator")
-
-	req, err := labels.NewRequirement(SecretLabelProvider, selection.Equals, []string{p.name})
-	if err != nil {
-		return fmt.Errorf("failed to create label requirement: %w", err)
-	}
-
-	watcher, err := p.secrets.Watch(Namespace, metav1.ListOptions{
-		LabelSelector: labels.NewSelector().Add(*req).String(),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create secret watcher: %w", err)
-	}
 
 	if err := p.handleCert(); err != nil {
 		logrus.Error(err)
 	}
 
+	p.secrets.OnChange(ctx, "imperative-api-secret-change", p.onChange)
+	p.secrets.OnRemove(ctx, "imperative-api-secret-remove", p.onRemove)
+
+	ticker := time.NewTicker(certCheckInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
-		case <-stopChan:
+		case <-ctx.Done():
 			logrus.Info("stopping imperative api cert rotator")
-
-			watcher.Stop()
 
 			if err := p.secrets.Delete(Namespace, p.secretName, &metav1.DeleteOptions{}); client.IgnoreNotFound(err) != nil {
 				logrus.Error(err)
 			}
 
 			return nil
-		case <-time.After(certCheckInterval):
+		case <-ticker.C:
 			if err := p.handleCert(); err != nil {
-				logrus.Error(err)
-			}
-		case event := <-watcher.ResultChan():
-			if err := p.handleCertEvent(event); err != nil {
 				logrus.Error(err)
 			}
 		}
@@ -339,33 +325,42 @@ func (p *rotatingSNIProvider) handleCert() error {
 	return nil
 }
 
-func (p *rotatingSNIProvider) handleCertEvent(event watch.Event) error {
-	switch event.Type {
-	case watch.Added, watch.Modified:
-		secret := event.Object.(*corev1.Secret)
-		certData, ok := secret.Data[corev1.TLSCertKey]
-		if !ok {
-			return fmt.Errorf("secret does not contain field '%s'", corev1.TLSCertKey)
-		}
-
-		keyData, ok := secret.Data[corev1.TLSPrivateKeyKey]
-		if !ok {
-			return fmt.Errorf("secret does not contain field '%s'", corev1.TLSPrivateKeyKey)
-		}
-
-		p.contentMu.Lock()
-		p.cert = certData
-		p.key = keyData
-		p.contentMu.Unlock()
-
-		p.notify()
-	case watch.Deleted:
-		if err := p.createOrUpdateCerts(nil); err != nil {
-			return err
-		}
+func (p *rotatingSNIProvider) onChange(_ string, secret *corev1.Secret) (*corev1.Secret, error) {
+	if secret.Namespace != Namespace && secret.Name != p.secretName {
+		return secret, nil
 	}
 
-	return nil
+	certData, ok := secret.Data[corev1.TLSCertKey]
+	if !ok {
+		return nil, fmt.Errorf("secret does not contain field '%s'", corev1.TLSCertKey)
+	}
+
+	keyData, ok := secret.Data[corev1.TLSPrivateKeyKey]
+	if !ok {
+		return nil, fmt.Errorf("secret does not contian field '%s'", corev1.TLSPrivateKeyKey)
+	}
+
+	p.contentMu.Lock()
+
+	p.cert = certData
+	p.key = keyData
+	p.contentMu.Unlock()
+
+	p.notify()
+
+	return nil, nil
+}
+
+func (p *rotatingSNIProvider) onRemove(s string, secret *corev1.Secret) (*corev1.Secret, error) {
+	if secret.Namespace != Namespace && secret.Name != p.secretName {
+		return secret, nil
+	}
+
+	if err := p.createOrUpdateCerts(nil); err != nil {
+		return nil, fmt.Errorf("faeild to create or update certs: %w", err)
+	}
+
+	return secret, nil
 }
 
 type listenerFunc func()
