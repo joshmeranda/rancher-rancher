@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/rancher/dynamiclistener/storage/kubernetes"
 	extstores "github.com/rancher/rancher/pkg/ext/stores"
 	"github.com/rancher/rancher/pkg/features"
 	"github.com/rancher/rancher/pkg/wrangler"
@@ -159,9 +158,7 @@ func NewExtensionAPIServer(ctx context.Context, wranglerContext *wrangler.Contex
 		sniProvider.AddListener(ApiServiceCertListener(sniProvider, wranglerContext.API.APIService()))
 		additionalSniProviders = append(additionalSniProviders, sniProvider)
 
-		store := kubernetes.New(ctx, coreGetterFactory(wranglerContext), Namespace, CertName, sniProvider)
-
-		ln, err = getListener(wranglerContext, store)
+		ln, err = getListener(wranglerContext, sniProvider)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get listener: %w", err)
 		}

@@ -1,6 +1,7 @@
 package ext
 
 import (
+	"context"
 	"crypto"
 	"crypto/x509"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"github.com/rancher/dynamiclistener"
 	dlc "github.com/rancher/dynamiclistener/cert"
 	"github.com/rancher/dynamiclistener/factory"
+	"github.com/rancher/dynamiclistener/storage/kubernetes"
 	"github.com/rancher/rancher/pkg/wrangler"
 	wranglerapiregistrationv1 "github.com/rancher/wrangler/v3/pkg/generated/controllers/apiregistration.k8s.io/v1"
 	"github.com/rancher/wrangler/v3/pkg/generated/controllers/core"
@@ -194,7 +196,10 @@ func getOrCreateCertKey(secrets wranglercorev1.SecretController, config dynamicl
 	return cert, signer, nil
 }
 
-func getListener(wranglerContext *wrangler.Context, store dynamiclistener.TLSStorage) (net.Listener, error) {
+// func getListener(wranglerContext *wrangler.Context, store dynamiclistener.TLSStorage) (net.Listener, error) {
+func getListener(wranglerContext *wrangler.Context, sniProvider dynamiclistener.TLSStorage) (net.Listener, error) {
+	store := kubernetes.New(context.TODO(), coreGetterFactory(wranglerContext), Namespace, CertName, sniProvider)
+
 	// Only need to listen on localhost because that port will be reached
 	// from a remotedialer tunnel on localhost
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", Port))
@@ -224,7 +229,7 @@ func getListener(wranglerContext *wrangler.Context, store dynamiclistener.TLSSto
 		return nil, err
 	}
 
-	setter, ok := ln.(dynamiclistener.SetFactory)
+	setter, ok := store.(dynamiclistener.SetFactory)
 	if !ok {
 		return nil, fmt.Errorf("listener does not implement dynamiclistener.SetFactory")
 	}

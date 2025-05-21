@@ -20,6 +20,11 @@ import (
 	netutils "k8s.io/utils/net"
 )
 
+const (
+	// CertLength = time.Hour*24*90
+	CertLength = time.Second * 5
+)
+
 func GenerateSelfSignedCertKeyWithOpts(host string, expireAfter time.Duration) ([]byte, []byte, error) {
 	// valid for an extra check interval before current time to ensure total cert coverage and avoid any issues with clock skew
 	validFrom := time.Now().Add(-time.Hour)
@@ -134,7 +139,7 @@ func (s *SandboxFactory) Merge(target *v1.Secret, additional *v1.Secret) (*v1.Se
 func (s *SandboxFactory) Regenerate(secret *v1.Secret) (*v1.Secret, error) {
 	logrus.Errorf("SandboxFactory.Regenerate test implementation, doing nothing")
 
-	certData, keyData, err := GenerateSelfSignedCertKeyWithOpts(s.host, time.Hour*24*90)
+	certData, keyData, err := GenerateSelfSignedCertKeyWithOpts(s.host, CertLength)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +153,7 @@ func (s *SandboxFactory) Regenerate(secret *v1.Secret) (*v1.Secret, error) {
 func (s *SandboxFactory) Renew(secret *v1.Secret) (*v1.Secret, error) {
 	logrus.Errorf("SandboxFactory.Renew test implementation, doing nothing")
 
-	certData, keyData, err := GenerateSelfSignedCertKeyWithOpts(s.host, time.Hour*24*90)
+	certData, keyData, err := GenerateSelfSignedCertKeyWithOpts(s.host, CertLength)
 	if err != nil {
 		return nil, err
 	}
