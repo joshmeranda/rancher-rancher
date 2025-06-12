@@ -67,6 +67,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/retry"
+	apiregistrationv1 "k8s.io/kube-aggregator/pkg/apis/apiregistration/v1"
 )
 
 const (
@@ -106,7 +107,6 @@ type Rancher struct {
 	opts       *Options
 
 	aggregationRegistrationTimeout time.Duration
-	kubeAggregationReadyChan       <-chan struct{}
 }
 
 func New(ctx context.Context, clientConfg clientcmd.ClientConfig, opts *Options) (*Rancher, error) {
@@ -239,15 +239,9 @@ func New(ctx context.Context, clientConfg clientcmd.ClientConfig, opts *Options)
 	}
 
 	extensionOpts := ext.DefaultOptions()
-
 	extensionAPIServer, err := ext.NewExtensionAPIServer(ctx, wranglerContext, extensionOpts)
 	if err != nil {
 		return nil, fmt.Errorf("extension api server: %w", err)
-	}
-
-	var kubeAggregationReadyChan <-chan struct{}
-	if extensionAPIServer != nil {
-		kubeAggregationReadyChan = extensionAPIServer.Registered()
 	}
 
 	steve, err := steveserver.New(ctx, restConfig, &steveserver.Options{
@@ -322,7 +316,6 @@ func New(ctx context.Context, clientConfg clientcmd.ClientConfig, opts *Options)
 		authServer:                     authServer,
 		opts:                           opts,
 		aggregationRegistrationTimeout: opts.AggregationRegistrationTimeout,
-		kubeAggregationReadyChan:       kubeAggregationReadyChan,
 	}, nil
 }
 
@@ -381,14 +374,34 @@ func (r *Rancher) ListenAndServe(ctx context.Context) error {
 	r.startAggregation(ctx)
 	go r.Steve.StartAggregation(ctx)
 
-	if !features.MCMAgent.Enabled() && r.kubeAggregationReadyChan != nil {
+	if !features.MCMAgent.Enabled() {
+		apiservices := r.Wrangler.API.APIService()
+
 		go func() {
 			logrus.Infof("Waiting for %s imperative API to be ready", r.aggregationRegistrationTimeout)
 
-			select {
-			case <-r.kubeAggregationReadyChan:
+			err := wait.PollUntilContextTimeout(ctx, time.Second*1, r.aggregationRegistrationTimeout, true, func(context.Context) (bool, error) {
+				ext, err := apiservices.Get("v1.ext.cattle.io", metav1.GetOptions{})
+				if err != nil {
+					return false, err
+				}
+
+				for _, cond := range ext.Status.Conditions {
+					if cond.Type == "Available" && cond.Status == apiregistrationv1.ConditionTrue {
+						return true, nil
+					}
+
+					if cond.Type == "Available" && cond.Status != apiregistrationv1.ConditionFalse {
+						break
+					}
+				}
+
+				return false, nil
+			})
+
+			if err == nil {
 				logrus.Info("kube-apiserver connected to imperative api")
-			case <-time.After(r.aggregationRegistrationTimeout):
+			} else {
 				logrus.Fatal("kube-apiserver did not contact the rancher imperative api in time, please ensure k8s is configured to support api extension")
 			}
 		}()
